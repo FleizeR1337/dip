@@ -1,0 +1,52 @@
+<!-- templates/payments/base.html -->
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Payment System</title>
+  <!-- Bootstrap CSS CDN -->
+  <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body>
+<nav class="navbar navbar-expand-lg navbar-light bg-light">
+  <a class="navbar-brand" href="{% url 'home' %}">🏠 PaymentSystem</a>
+  <div class="collapse navbar-collapse">
+    <ul class="navbar-nav mr-auto">
+      {% if user.is_authenticated %}
+    <li class="nav-item"><a class="nav-link" href="{% url 'sent_transactions' %}">Мои транзакции</a></li>
+    <li class="nav-item"><a class="nav-link" href="{% url 'received_transactions' %}">Полученные транзакции</a></li>
+      <li class="nav-item"><a class="nav-link" href="{% url 'scan_qr' %}">Сканировать QR-код</a></li>
+        <li class="nav-item"><a class="nav-link" href="{% url 'create_open_qr' %}">Создать открытый QR-код</a></li>
+        <li class="nav-item"><a class="nav-link" href="{% url 'create_fixed_qr' %}">Создать фиксированный QR-код</a></li>
+        <li class="nav-item"><a class="nav-link" href="{% url 'qr_history' %}">История QR-кодов</a></li>
+        {% if user.is_staff or user.role == 'admin' %}
+          <li class="nav-item"><a class="nav-link" href="{% url 'admin_dashboard' %}">Панель администратора</a></li>
+
+        {% endif %}
+      {% endif %}
+    </ul>
+    <ul class="navbar-nav">
+      {% if user.is_authenticated %}
+        <li class="nav-item"><span class="nav-link">Привет, <a href="{% url 'profile' %}">{{ user.username }}</a></span></li>
+        <li class="nav-item"><a class="nav-link" href="{% url 'logout' %}">Выйти</a></li>
+      {% else %}
+        <li class="nav-item"><a class="nav-link" href="{% url 'login' %}">Войти</a></li>
+      {% endif %}
+    </ul>
+  </div>
+</nav>
+
+<div class="container mt-4">
+  {% for message in messages %}
+    <div class="alert alert-{{ message.tags }}" role="alert">
+      {{ message }}
+    </div>
+  {% endfor %}
+  {% block content %}{% endblock %}
+</div>
+
+<!-- Bootstrap JS and dependencies -->
+<script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
+<script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

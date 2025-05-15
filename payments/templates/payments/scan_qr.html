@@ -1,0 +1,43 @@
+{% extends 'payments/base.html' %}
+
+{% block content %}
+  <h2>Сканирование QR-кода</h2>
+  <div id="reader" style="width: 300px;"></div>
+  <script src="https://unpkg.com/html5-qrcode"></script>
+  <script>
+    // Создаем экземпляр сканера, привязанный к элементу с id "reader"
+    const html5QrCode = new Html5Qrcode("reader");
+
+    // Получаем список доступных камер
+    Html5Qrcode.getCameras().then(cameras => {
+      if (cameras && cameras.length) {
+        // Выбираем первую камеру (при необходимости можно дать выбор пользователю)
+        const cameraId = cameras[0].id;
+        html5QrCode.start(
+          cameraId,
+          {
+            fps: 10,
+            qrbox: 250
+          },
+          (decodedText, decodedResult) => {
+            // Код успешно считан, останавливаем сканер и перенаправляем пользователя
+            html5QrCode.stop().then(() => {
+              // Подставляем считанное значение в URL и переходим к обработке QR-кода
+              window.location.href = "{% url 'process_qr' 'CODE_PLACEHOLDER' %}".replace("CODE_PLACEHOLDER", decodedText);
+            }).catch(err => {
+              console.error("Ошибка при остановке сканера:", err);
+            });
+          },
+          (errorMessage) => {
+            // Вывод ошибок сканирования (можно оставить пустым или показать уведомление)
+            console.warn(`QR Code Scan Error: ${errorMessage}`);
+          }
+        );
+      } else {
+        console.error("Камеры не найдены.");
+      }
+    }).catch(err => {
+      console.error("Ошибка получения камер:", err);
+    });
+  </script>
+{% endblock %}
