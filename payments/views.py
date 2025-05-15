@@ -1,13 +1,22 @@
 from decimal import Decimal, InvalidOperation
 import io
+from .ml_utils import predict_fraud
+import numpy as np
+from .utils import calculate_user_features
+from django.shortcuts import render, redirect
+from django.contrib import messages
+from django.contrib.auth.decorators import login_required
+from .models import User, Transaction
+from .utils import calculate_user_features
+from .ml_utils import predict_fraud
 import qrcode
 from django.http import HttpResponse, Http404
 from .models import PaymentQRCode
 from django.urls import reverse
 from django.shortcuts import render
 from django.db import models
-# Create your views here.
-# payments/views.py (фрагмент)
+from .utils import calculate_user_features
+from .ml_utils import predict_fraud
 from django.shortcuts import render, redirect
 from django.contrib.auth import authenticate, login
 from django.contrib import messages
@@ -33,6 +42,9 @@ from django.contrib import messages
 
 from django.contrib.auth.decorators import login_required
 
+from .utils import calculate_user_features
+
+
 @login_required
 def sent_transactions(request):
     # Показываем только транзакции, инициированные текущим пользователем
@@ -44,79 +56,82 @@ def received_transactions(request):
     # Показываем транзакции, где пользователь является получателем и статус "APPROVED"
     transactions = Transaction.objects.filter(receiver=request.user, status='APPROVED').order_by('-date')
     return render(request, 'payments/received_transactions.html', {'transactions': transactions})
+
+
+
+from django.shortcuts import render, redirect
+from django.contrib import messages
+from django.contrib.auth.decorators import login_required
+from .models import User, Transaction
+from .utils import calculate_user_features
+from .ml_utils import predict_fraud
+
 @login_required
 def create_transaction(request):
     if request.method == 'POST':
         sender = request.user
-
-        if sender.account_status != 'active':
-            messages.error(request, "Ваша учетная запись заблокирована или заморожена. Транзакции недоступны.")
-            return redirect('home')
-
         receiver_account = request.POST.get('receiver_account')
+
         try:
             amount = float(request.POST.get('amount'))
         except (TypeError, ValueError):
             messages.error(request, "Некорректная сумма.")
             return redirect('home')
 
+        # Проверяем, существует ли получатель
         try:
             receiver = User.objects.get(account_number=receiver_account)
         except User.DoesNotExist:
-            messages.error(request, "Получатель с таким номером счёта не найден.")
+            messages.error(request, "Получатель не найден.")
             return redirect('home')
 
+        # ❌ Блокируем замороженные и заблокированные аккаунты
+        if sender.account_status in ['frozen', 'blocked']:
+            messages.error(request, "Ваш аккаунт заморожен или заблокирован. Транзакции невозможны.")
+            return redirect('home')
+
+        if receiver.account_status in ['frozen', 'blocked']:
+            messages.error(request, "Аккаунт получателя заморожен или заблокирован. Транзакция отклонена.")
+            return redirect('home')
+
+        # Проверка: нельзя переводить самому себе
         if sender.pk == receiver.pk:
             messages.error(request, "Нельзя отправлять деньги самому себе.")
             return redirect('home')
 
-        if receiver.account_status != 'active':
-            messages.error(request, "У получателя заблокирован или заморожен аккаунт. Транзакция недоступна.")
-            return redirect('home')
-
+        # Проверка баланса отправителя
         if sender.balance < amount:
             messages.error(request, "Недостаточно средств.")
             return redirect('home')
 
-        transaction = Transaction.objects.create(sender=sender, receiver=receiver, amount=amount, status='PENDING')
+        # Машинное обучение (определение риска)
+        features = calculate_user_features(sender, amount)
+        risk_score = predict_fraud(features)
 
-        risk = 0.0
-        reasons = []
-        HIGH_AMOUNT_THRESHOLD = 10000.0
-        if amount >= HIGH_AMOUNT_THRESHOLD:
-            risk += 50.0
-            reasons.append(f"Высокая сумма транзакции (>{HIGH_AMOUNT_THRESHOLD}).")
-
-        days_since_signup = (timezone.now() - sender.date_joined).days
-        if days_since_signup < 7 and amount >= 1000.0:
-            risk += 20.0
-            reasons.append("Отправитель - новый пользователь с крупным платежом.")
-
-        one_hour_ago = timezone.now() - timezone.timedelta(hours=1)
-        recent_count = Transaction.objects.filter(sender=sender, date__gte=one_hour_ago).count()
-        if recent_count > 5:
-            risk += 30.0
-            reasons.append("Высокая частота платежей от отправителя за последний час.")
-
-        transaction.risk_score = risk
-
-        if risk >= 50.0:
-            transaction.status = 'SUSPICIOUS'
-            reason_text = " ".join(reasons) if reasons else "Правила риска сработали."
-            SuspiciousLog.objects.create(transaction=transaction, reason=reason_text)
-            messages.warning(request, "Транзакция отправлена на проверку безопасности.")
+        if risk_score >= 50.0:
+            status = 'SUSPICIOUS'
+            messages.warning(request, "Транзакция требует дополнительной проверки.")
         else:
-            transaction.status = 'APPROVED'
+            status = 'APPROVED'
             sender.balance -= amount
             receiver.balance += amount
             sender.save()
             receiver.save()
             messages.success(request, "Транзакция успешно выполнена.")
 
-        transaction.save()
+        # Создание транзакции
+        Transaction.objects.create(
+            sender=sender,
+            receiver=receiver,
+            amount=amount,
+            risk_score=risk_score,
+            status=status
+        )
+
         return redirect('sent_transactions')
-    else:
-        return render(request, 'payments/new_transaction.html')
+
+    return render(request, 'payments/new_transaction.html')
+
 
 @login_required
 def scan_qr_code(request):
@@ -154,6 +169,7 @@ def view_qr_page(request, code):
     }
     return render(request, 'payments/view_qr.html', context)
 
+
 @login_required
 def transfer_via_qr(request, code):
     try:
@@ -163,6 +179,16 @@ def transfer_via_qr(request, code):
         return redirect('home')
 
     sender = request.user
+
+    # ❌ Блокируем замороженные и заблокированные аккаунты
+    if sender.account_status in ['frozen', 'blocked']:
+        messages.error(request, "Ваш аккаунт заморожен или заблокирован. Транзакции невозможны.")
+        return redirect('home')
+
+    if qr.owner.account_status in ['frozen', 'blocked']:
+        messages.error(request, "Аккаунт получателя заморожен или заблокирован. Транзакция отклонена.")
+        return redirect('home')
+
     # Запрещаем перевод самому себе
     if sender.pk == qr.owner.pk:
         messages.error(request, "Нельзя переводить самому себе.")
@@ -184,7 +210,7 @@ def transfer_via_qr(request, code):
             messages.error(request, "Недостаточно средств.")
             return redirect('process_qr', code=code)
 
-        # Создаем транзакцию
+        # Создание транзакции
         transaction = Transaction.objects.create(sender=sender, receiver=qr.owner, amount=amount, status='APPROVED')
         sender.balance -= amount
         qr.owner.balance += amount
@@ -200,6 +226,7 @@ def transfer_via_qr(request, code):
         return redirect('sent_transactions')
     else:
         return render(request, 'payments/process_qr.html', {'qr': qr})
+
 
 
 @login_required
@@ -429,3 +456,34 @@ def qr_code_image(request, code):
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return HttpResponse(buf.getvalue(), content_type="image/png")
+
+
+import joblib
+import os
+
+
+# Функция для извлечения признаков из новой транзакции (аналогична оффлайн-версии)
+def extract_features_from_tx(sender, amount):
+    days_since_signup = (timezone.now() - sender.date_joined).days
+    one_hour_ago = timezone.now() - timezone.timedelta(hours=1)
+    recent_count = Transaction.objects.filter(sender=sender, date__gte=one_hour_ago).count()
+    return [amount, days_since_signup, recent_count]
+
+
+def predict_fraud_risk(sender, amount):
+    # Загрузите модель (убедитесь, что путь корректный и модель обучена)
+    model_path = os.path.join(os.path.dirname(__file__), 'fraud_model_balanced.pkl')
+    try:
+        model = joblib.load(model_path)
+    except Exception as e:
+        # Если модель не найдена, вернем нулевой риск
+        return 0.0, []
+
+    features = np.array([extract_features_from_tx(sender, amount)])
+    risk_probability = model.predict_proba(features)[0][1]  # вероятность мошенничества
+    # Можно добавить дополнительные причины на основе пороговых значений
+    reasons = []
+    if risk_probability >= 0.5:
+        reasons.append("Высокая вероятность мошенничества по модели.")
+    return risk_probability * 100.0, reasons  # переводим в проценты
+

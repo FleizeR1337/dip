@@ -1,43 +1,36 @@
-{% extends 'payments/base.html' %}
-
+{% extends "payments/base.html" %}
 {% block content %}
-  <h2>Сканирование QR-кода</h2>
-  <div id="reader" style="width: 300px;"></div>
-  <script src="https://unpkg.com/html5-qrcode"></script>
-  <script>
-    // Создаем экземпляр сканера, привязанный к элементу с id "reader"
-    const html5QrCode = new Html5Qrcode("reader");
+<h2>Сканирование QR-кода</h2>
 
-    // Получаем список доступных камер
-    Html5Qrcode.getCameras().then(cameras => {
-      if (cameras && cameras.length) {
-        // Выбираем первую камеру (при необходимости можно дать выбор пользователю)
-        const cameraId = cameras[0].id;
-        html5QrCode.start(
-          cameraId,
-          {
-            fps: 10,
-            qrbox: 250
-          },
-          (decodedText, decodedResult) => {
-            // Код успешно считан, останавливаем сканер и перенаправляем пользователя
-            html5QrCode.stop().then(() => {
-              // Подставляем считанное значение в URL и переходим к обработке QR-кода
-              window.location.href = "{% url 'process_qr' 'CODE_PLACEHOLDER' %}".replace("CODE_PLACEHOLDER", decodedText);
-            }).catch(err => {
-              console.error("Ошибка при остановке сканера:", err);
-            });
-          },
-          (errorMessage) => {
-            // Вывод ошибок сканирования (можно оставить пустым или показать уведомление)
-            console.warn(`QR Code Scan Error: ${errorMessage}`);
-          }
-        );
-      } else {
-        console.error("Камеры не найдены.");
-      }
-    }).catch(err => {
-      console.error("Ошибка получения камер:", err);
+<video id="preview" style="width: 100%; max-width: 400px; border: 2px solid black;"></video>
+<p id="qr_result" style="margin-top: 10px; font-weight: bold;"></p>
+
+<script>
+    let scanner = new Instascan.Scanner({ video: document.getElementById('preview') });
+
+    scanner.addListener('scan', function(content) {
+        document.getElementById('qr_result').innerText = "QR-код найден: " + content;
+        fetch(`/process_qr_code/?qr_data=${encodeURIComponent(content)}`)
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    document.getElementById('qr_result').innerText = `Транзакция ID: ${data.transaction_id}, Сумма: ${data.amount}, Статус: ${data.status}`;
+                } else {
+                    document.getElementById('qr_result').innerText = "Ошибка: " + data.error;
+                }
+            })
+            .catch(error => console.error("Ошибка при обработке QR-кода:", error));
     });
-  </script>
+
+    Instascan.Camera.getCameras().then(function(cameras) {
+        if (cameras.length > 0) {
+            scanner.start(cameras[0]); // Включаем камеру
+        } else {
+            alert("Камера не найдена");
+        }
+    }).catch(function(e) {
+        console.error(e);
+    });
+</script>
+
 {% endblock %}
